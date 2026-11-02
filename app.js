@@ -82,10 +82,77 @@ async function loadSeasons(series, list, select){
     select.onchange=loadEpisodes;await loadEpisodes();
   }catch{if(isCurrent()){select.innerHTML='<option>Unavailable</option>';list.innerHTML='<p class="episode-message">Could not load seasons. Close this window and try again.</p>';}}
 }
-async function play(item){if(!session){closeModal();account();toast('Connect your Jellyfin server to play your media');return;}try{let playable=item;if(item.Type==='Series'){const data=await api(`/Shows/${encodeURIComponent(item.Id)}/Episodes?UserId=${encodeURIComponent(session.userId)}&Limit=1&Fields=MediaSources`);playable=data.Items?.[0];if(!playable)throw Error('No episodes found');}closeModal();const video=$('#video');video.src=`${session.server}/Videos/${encodeURIComponent(playable.Id)}/stream?static=true&ApiKey=${encodeURIComponent(session.token)}`;$('#player').classList.remove('hidden');video.play().catch(()=>toast('Press play to start watching'));}catch(e){toast(e.message||'Unable to play this title');}}
+let playback = null, playbackGeneration = 0, subtitleGeneration = 0, subtitleUrl = null, hlsPlayer = null, audioSwitchGeneration = 0;
+function destroyHls(){audioSwitchGeneration++;if(hlsPlayer){hlsPlayer.destroy();hlsPlayer=null;}$('#video').onloadedmetadata=null;}
+function clearSubtitle(){
+  subtitleGeneration++;
+  const video=$('#video');
+  video.querySelectorAll('track[data-jellyflix]').forEach(track=>track.remove());
+  if(subtitleUrl){URL.revokeObjectURL(subtitleUrl);subtitleUrl=null;}
+}
+function closeTrackMenu(){$('#track-menu').classList.add('hidden');$('#track-toggle').setAttribute('aria-expanded','false');}
+function trackLabel(stream){return stream.DisplayTitle||stream.Title||[stream.Language?.toUpperCase(),stream.Codec?.toUpperCase()].filter(Boolean).join(' · ')||`Track ${stream.Index}`;}
+function trackMessage(message){$('#track-message').textContent=message;}
+async function loadTracks(item, generation){
+  const audio=$('#audio-select'), subtitles=$('#subtitle-select');
+  audio.disabled=true;subtitles.disabled=true;audio.innerHTML='<option>Loading tracks…</option>';subtitles.innerHTML='<option>Loading tracks…</option>';trackMessage('');
+  try{
+    const info=await api(`/Users/${encodeURIComponent(session.userId)}/Items/${encodeURIComponent(item.Id)}?Fields=MediaSources`);
+    if(generation!==playbackGeneration)return;
+    const source=info.MediaSources?.[0];
+    if(!source)throw new Error('No media source available');
+    playback={item,source};
+    const streams=source.MediaStreams||info.MediaStreams||[];
+    const audioStreams=streams.filter(stream=>stream.Type==='Audio');
+    const subtitleStreams=streams.filter(stream=>stream.Type==='Subtitle');
+    const defaultAudio=source.DefaultAudioStreamIndex ?? audioStreams.find(stream=>stream.IsDefault)?.Index ?? audioStreams[0]?.Index;
+    audio.innerHTML=audioStreams.length?audioStreams.map(stream=>`<option value="${esc(stream.Index)}" ${stream.Index===defaultAudio?'selected':''}>${esc(trackLabel(stream))}</option>`).join(''):'<option>No audio tracks available</option>';
+    audio.disabled=audioStreams.length<2;
+    subtitles.innerHTML='<option value="">Off</option>'+subtitleStreams.map(stream=>{const unsupported=stream.IsTextSubtitleStream===false;return `<option value="${esc(stream.Index)}" ${unsupported?'disabled':''}>${esc(trackLabel(stream))}${unsupported?' (image format not supported)':''}</option>`;}).join('');
+    subtitles.disabled=!subtitleStreams.some(stream=>stream.IsTextSubtitleStream!==false);
+    if(subtitleStreams.some(stream=>stream.IsTextSubtitleStream===false))trackMessage('Image-based subtitles are not supported by this player.');
+  }catch{if(generation===playbackGeneration){audio.innerHTML='<option>Tracks unavailable</option>';subtitles.innerHTML='<option>Tracks unavailable</option>';trackMessage('Could not load tracks from Jellyfin.');}}
+}
+async function selectSubtitle(){
+  clearSubtitle();const selected=$('#subtitle-select').value;if(!selected||!playback)return;
+  const generation=subtitleGeneration, active=playback;
+  const url=`${session.server}/Videos/${encodeURIComponent(active.item.Id)}/${encodeURIComponent(active.source.Id)}/Subtitles/${encodeURIComponent(selected)}/Stream.vtt?ApiKey=${encodeURIComponent(session.token)}`;
+  try{
+    const response=await fetch(url);if(!response.ok)throw new Error();const data=await response.blob();
+    if(generation!==subtitleGeneration||playback!==active)return;
+    subtitleUrl=URL.createObjectURL(data);const track=document.createElement('track');track.dataset.jellyflix='true';track.kind='subtitles';track.label=$('#subtitle-select').selectedOptions[0].textContent;track.src=subtitleUrl;track.default=true;$('#video').appendChild(track);track.track.mode='showing';
+    trackMessage('');
+  }catch{if(generation===subtitleGeneration){$('#subtitle-select').value='';trackMessage('Could not load this subtitle track from Jellyfin.');}}
+}
+function selectAudio(){
+  if(!playback)return;
+  const video=$('#video'), time=video.currentTime, wasPlaying=!video.paused;
+  const useNative=!!video.canPlayType('application/vnd.apple.mpegurl');
+  const useHls=typeof Hls!=='undefined' && Hls.isSupported();
+  if(!useNative&&!useHls){trackMessage('Your browser does not support HLS audio switching.');return;}
+  const videoStream=(playback.source.MediaStreams||[]).find(stream=>stream.Type==='Video');
+  // Allow Jellyfin to copy H.264 video; if it must encode, retain a generous source-based bitrate.
+  const bitrate=Math.max(8000000, Math.min(100000000, Number(videoStream?.BitRate || playback.source.Bitrate || 20000000)));
+  const params=new URLSearchParams({MediaSourceId:playback.source.Id,AudioStreamIndex:$('#audio-select').value,VideoCodec:'h264',AudioCodec:'aac',VideoBitrate:String(bitrate),AudioBitrate:'320000',AllowVideoStreamCopy:'true',SegmentContainer:'ts',MinSegments:'1',ApiKey:session.token});
+  const url=`${session.server}/Videos/${encodeURIComponent(playback.item.Id)}/master.m3u8?${params}`;
+  destroyHls();const generation=audioSwitchGeneration;
+  video.pause();video.removeAttribute('src');video.load();
+  video.onloadedmetadata=()=>{if(generation!==audioSwitchGeneration)return;video.onloadedmetadata=null;if(Number.isFinite(time))video.currentTime=time;if(wasPlaying)video.play().catch(()=>toast('Press play to continue watching'));};
+  if(useNative){video.src=url;video.load();}
+  else{
+    hlsPlayer=new Hls();
+    hlsPlayer.on(Hls.Events.ERROR,(_event,data)=>{if(data.fatal&&generation===audioSwitchGeneration)trackMessage('Could not switch audio. Check whether your Jellyfin server allows transcoding.');});
+    hlsPlayer.loadSource(url);hlsPlayer.attachMedia(video);
+  }
+  trackMessage('Changing audio may take a moment while Jellyfin prepares the stream.');
+}
+async function play(item){if(!session){closeModal();account();toast('Connect your Jellyfin server to play your media');return;}try{let playable=item;if(item.Type==='Series'){const data=await api(`/Shows/${encodeURIComponent(item.Id)}/Episodes?UserId=${encodeURIComponent(session.userId)}&Limit=1&Fields=MediaSources`);playable=data.Items?.[0];if(!playable)throw Error('No episodes found');}closeModal();clearSubtitle();closeTrackMenu();destroyHls();playback=null;const generation=++playbackGeneration;const video=$('#video');video.src=`${session.server}/Videos/${encodeURIComponent(playable.Id)}/stream?static=true&ApiKey=${encodeURIComponent(session.token)}`;$('#player').classList.remove('hidden');loadTracks(playable,generation);video.play().catch(()=>toast('Press play to start watching'));}catch(e){toast(e.message||'Unable to play this title');}}
+$('#track-toggle').onclick=()=>{const open=$('#track-menu').classList.toggle('hidden')===false;$('#track-toggle').setAttribute('aria-expanded',String(open));};
+$('#audio-select').onchange=selectAudio;$('#subtitle-select').onchange=selectSubtitle;
+$('#video').addEventListener('error',()=>{if(!$('#player').classList.contains('hidden'))trackMessage('Playback failed. Your server may not support the selected stream or transcoding.');});
 $('#rows').addEventListener('click',e=>{const card=e.target.closest('[data-id]');if(card){const item=allItems.find(i=>i.Id===card.dataset.id);if(item)details(item);}});
 $('.nav nav').addEventListener('click',e=>{const button=e.target.closest('[data-view]');if(!button)return;currentView=button.dataset.view;searchTerm='';$('#search').value='';document.querySelectorAll('.nav-link').forEach(x=>x.classList.toggle('active',x===button));render();window.scrollTo({top:0,behavior:'smooth'});});
 $('.brand').onclick=()=>{currentView='home';searchTerm='';document.querySelectorAll('.nav-link').forEach(x=>x.classList.toggle('active',x.dataset.view==='home'));render();};
 $('.search-toggle').onclick=()=>{$('.search-box').classList.add('open');$('#search').focus();};$('.search-close').onclick=()=>{$('.search-box').classList.remove('open');$('#search').value='';searchTerm='';render();};$('#search').oninput=e=>{searchTerm=e.target.value;render();};
-$('#account').onclick=account;$('#connect-inline').onclick=account;$('#hero-info').onclick=()=>details(currentFeatured);$('#hero-play').onclick=()=>play(currentFeatured);$('.modal-close').onclick=closeModal;$('#modal').onclick=e=>{if(e.target.id==='modal')closeModal();};$('.player-close').onclick=()=>{$('#video').pause();$('#video').removeAttribute('src');$('#video').load();$('#player').classList.add('hidden');};document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();if(!$('#player').classList.contains('hidden'))$('.player-close').click();}});
+$('#account').onclick=account;$('#connect-inline').onclick=account;$('#hero-info').onclick=()=>details(currentFeatured);$('#hero-play').onclick=()=>play(currentFeatured);$('.modal-close').onclick=closeModal;$('#modal').onclick=e=>{if(e.target.id==='modal')closeModal();};$('.player-close').onclick=()=>{playbackGeneration++;playback=null;clearSubtitle();closeTrackMenu();destroyHls();$('#video').pause();$('#video').removeAttribute('src');$('#video').load();$('#player').classList.add('hidden');};document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();if(!$('#player').classList.contains('hidden'))$('.player-close').click();}});
 loadLibrary();

@@ -14,4 +14,4 @@ Open `http://localhost:8000` and select the profile icon or “Explore demo libr
 
 The browser stores the Jellyfin access token and server address in local storage to keep you signed in. Disconnect using the profile menu to remove them. Passwords are sent directly to Jellyfin and are not stored by JellyFlix.
 
-Playback uses Jellyfin's direct stream endpoint and depends on browser support for the media format. For a series, Play starts its first episode. The demo catalog is illustrative and requires a connected server for playback.
+Playback starts with Jellyfin's direct stream endpoint and depends on browser support for the media format. Switching audio uses HLS and may require server-side transcoding; compatible video is copied when possible. HLS playback uses the bundled hls.js library (see vendor/HLS-LICENSE.txt). For a series, Play starts its first episode. The demo catalog is illustrative and requires a connected server for playback.

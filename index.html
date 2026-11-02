@@ -20,7 +20,8 @@
   </main>
   <footer><a href="#home" class="footer-brand">JELLYFLIX<span>.</span></a><p>YOUR LIBRARY. YOUR STORIES.</p><div>Made for movie nights <span>✦</span></div></footer>
   <div class="modal-backdrop hidden" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-card"><button class="modal-close" aria-label="Close">×</button><div id="modal-content"></div></div></div>
-  <div class="player-backdrop hidden" id="player"><button class="player-close" aria-label="Close player">← <span>Back to browsing</span></button><video id="video" controls playsinline></video></div>
+  <div class="player-backdrop hidden" id="player"><button class="player-close" aria-label="Close player">← <span>Back to browsing</span></button><video id="video" controls playsinline></video><div class="track-controls"><button id="track-toggle" class="track-toggle" aria-expanded="false" aria-controls="track-menu">☷ <span>Audio &amp; Subtitles</span></button><div id="track-menu" class="track-menu hidden"><h3>Audio &amp; Subtitles</h3><label for="audio-select">Audio</label><select id="audio-select" disabled><option>Loading tracks…</option></select><label for="subtitle-select">Subtitles</label><select id="subtitle-select" disabled><option>Loading tracks…</option></select><p id="track-message" role="status"></p></div></div></div>
   <div class="toast hidden" id="toast" role="status"></div>
+  <script src="vendor/hls.min.js"></script>
   <script src="app.js"></script>
 </body></html>
