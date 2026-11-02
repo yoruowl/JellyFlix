@@ -2,6 +2,18 @@
 
 A Netflix-inspired web client for your Jellyfin library. Browse the demo immediately, or connect to a Jellyfin server to see your movies and shows, search, save favorites, and play media.
 
+## Screenshots
+
+The screenshots below show the built-in demo library. Your connected Jellyfin library will show your own titles and artwork.
+
+**Home and library browsing**
+
+![JellyFlix home screen with featured title and library rows](docs/screenshots/home.png)
+
+**Series and episodes**
+
+![Series details with a season selector and episode list](docs/screenshots/series.png)
+
 ## Run locally
 
 Serve this directory with any static web server. For example:
